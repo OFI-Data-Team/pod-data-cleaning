@@ -1,0 +1,96 @@
+name: Build Cross-Platform Binaries
+
+on:
+  push:
+    tags:
+      - "*"
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            binary_name: trim-burst-edges.exe
+          - os: ubuntu-latest
+            platform: linux
+            binary_name: trim-burst-edges
+          - os: macos-latest
+            platform: macos
+            binary_name: trim-burst-edges
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Build executable
+        run: pyinstaller --onefile --name trim-burst-edges scripts/trim_burst_edges.py
+
+      - name: Build distribution archive
+        shell: python
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          BINARY_NAME: ${{ matrix.binary_name }}
+        run: |
+          import os
+          import shutil
+          import zipfile
+          from pathlib import Path
+
+          dist = Path("dist")
+          package_dir = Path("package")
+          package_dir.mkdir(exist_ok=True)
+          shutil.copy2(dist / os.environ["BINARY_NAME"], package_dir / os.environ["BINARY_NAME"])
+          shutil.copy2(Path("README.md"), package_dir / "README.md")
+
+          archive = dist / f'trim-burst-edges-{os.environ["PLATFORM"]}.zip'
+          with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+              for path in package_dir.iterdir():
+                  zf.write(path, path.name)
+
+          print(f"Created {archive}")
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trim-burst-edges-${{ matrix.platform }}-package
+          path: dist/trim-burst-edges-${{ matrix.platform }}.zip
+          if-no-files-found: error
+
+  publish-release-assets:
+    name: Publish Release Assets
+    needs: build
+    if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: trim-burst-edges-*-package
+          merge-multiple: true
+          path: dist
+
+      - name: Upload archives to release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          overwrite_files: true
